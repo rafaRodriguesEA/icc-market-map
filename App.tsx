@@ -6,6 +6,7 @@ import { subscribeToClients, addClient, updateClient, deleteClient, subscribeToU
 import { generateCommercialStrategy } from './services/geminiService';
 import { Client, ClientStatus, AIAnalysis, UserProfile, AccessLevel, AppSettings, Product, MarketEntry } from './types';
 import { STATUS_COLORS, SEGMENT_ICONS, DEFAULT_AVATAR } from './constants';
+import { SKIP_AUTH, TEST_USER } from './authConfig';
 import StatsCard from './components/StatsCard';
 import ClientForm from './components/ClientForm';
 import ClientProfile from './components/ClientProfile';
@@ -27,11 +28,21 @@ enum View {
 
 const MASTER_EMAIL = 'giovane.santos@iccbrazil.com.br';
 
+const profileFromAuthUser = (user: FirebaseUser): UserProfile => ({
+  uid: user.uid,
+  email: user.email!,
+  displayName: user.displayName || user.email!.split('@')[0],
+  role: user.email === MASTER_EMAIL ? 'Diretor Comercial' : 'N/A',
+  department: user.email === MASTER_EMAIL ? 'Diretoria' : 'N/A',
+  accessLevel: user.email === MASTER_EMAIL ? AccessLevel.SUPERADMIN : AccessLevel.OTHER,
+  photoUrl: user.photoURL || '',
+});
+
 const App: React.FC = () => {
   // Auth State
   const [authUser, setAuthUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(SKIP_AUTH ? TEST_USER : null);
+  const [loadingAuth, setLoadingAuth] = useState(!SKIP_AUTH);
 
   // App Data
   const [currentView, setCurrentView] = useState<View>(View.DASHBOARD);
@@ -52,17 +63,22 @@ const App: React.FC = () => {
 
   // 1. Initialize Auth and Fetch Settings (Public Data)
   useEffect(() => {
-    // Settings are public (logo, background), so we fetch immediately
     const unsubSettings = subscribeToSettings((data) => setSettings(data));
-    
+
+    if (SKIP_AUTH) {
+      return () => unsubSettings();
+    }
+
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
       if (!user) {
-        // Clear data on logout
         setUserProfile(null);
         setClients([]);
         setProducts([]);
         setMarketEntries([]);
+      } else {
+        // Perfil imediato — evita travar após login enquanto o RTDB responde
+        setUserProfile((prev) => (prev?.uid === user.uid ? prev : profileFromAuthUser(user)));
       }
       setLoadingAuth(false);
     });
@@ -73,57 +89,45 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // 2. Fetch User Profile and Private Data (Products, Market) ONLY when Auth is ready
+  // 2. Fetch app data when há usuário (autenticado ou modo teste)
   useEffect(() => {
-    if (!authUser) return;
+    if (!SKIP_AUTH && !authUser) return;
+    if (!userProfile) return;
 
-    // A. Subscribe to Products
     const unsubProducts = subscribeToProducts((data) => setProducts(data));
-    
-    // B. Subscribe to Market Intelligence
     const unsubMarket = subscribeToMarketPrices((data) => setMarketEntries(data));
 
-    // C. Subscribe to Users & Handle Profile
     const unsubUsers = subscribeToUsers((allUsers) => {
-        setUsers(allUsers);
-        
-        let profile = allUsers.find(u => u.uid === authUser.uid);
-        
-        // Handle Master Admin hardcode / First login
-        if (!profile && authUser.email === MASTER_EMAIL) {
-            profile = {
-                uid: authUser.uid,
-                email: authUser.email!,
-                displayName: authUser.displayName || 'Master Admin',
-                role: 'Diretor Comercial',
-                department: 'Diretoria',
-                accessLevel: AccessLevel.SUPERADMIN,
-                photoUrl: authUser.photoURL || ""
-            };
-            saveUser(profile); // Auto-create master
-        } else if (!profile) {
-            // New regular user (login via Google but not in DB yet)
-            profile = {
-                uid: authUser.uid,
-                email: authUser.email!,
-                displayName: authUser.displayName || 'Novo Usuário',
-                role: 'N/A',
-                department: 'N/A',
-                accessLevel: AccessLevel.OTHER, // Restricted by default
-                photoUrl: authUser.photoURL || ""
-            };
-            saveUser(profile);
-        }
+      setUsers(allUsers);
 
-        setUserProfile(profile || null);
+      if (SKIP_AUTH) return;
+
+      const authUid = authUser!.uid;
+      let profile = allUsers.find((u) => u.uid === authUid);
+
+      if (!profile && authUser!.email === MASTER_EMAIL) {
+        profile = {
+          ...profileFromAuthUser(authUser!),
+          displayName: authUser!.displayName || 'Master Admin',
+          role: 'Diretor Comercial',
+          department: 'Diretoria',
+          accessLevel: AccessLevel.SUPERADMIN,
+        };
+        saveUser(profile).catch(console.error);
+      } else if (!profile) {
+        profile = profileFromAuthUser(authUser!);
+        saveUser(profile).catch(console.error);
+      }
+
+      if (profile) setUserProfile(profile);
     });
 
     return () => {
-        unsubProducts();
-        unsubMarket();
-        unsubUsers();
+      unsubProducts();
+      unsubMarket();
+      unsubUsers();
     };
-  }, [authUser]);
+  }, [authUser, userProfile?.uid]);
 
   // 3. Fetch Clients based on RLS (User Profile)
   useEffect(() => {
@@ -181,6 +185,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    if (SKIP_AUTH) return;
     auth.signOut();
   };
 
@@ -195,7 +200,7 @@ const App: React.FC = () => {
       );
   }
 
-  if (!authUser || !userProfile) {
+  if (!userProfile) {
       return <Login settings={settings} />;
   }
 
@@ -216,6 +221,11 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden">
+      {SKIP_AUTH && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-amber-950 text-center text-xs font-bold py-1.5 px-4">
+          Modo teste — login desativado. Defina VITE_SKIP_AUTH=false na Vercel para exigir autenticação.
+        </div>
+      )}
       {/* Sidebar */}
       <aside className="w-72 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-white flex flex-col shadow-2xl z-20 relative">
         <div className="h-44 relative flex items-center justify-center overflow-hidden border-b border-white/10">
@@ -299,9 +309,11 @@ const App: React.FC = () => {
                <p className="text-xs text-slate-400 truncate">{userProfile.role}</p>
              </div>
            </div>
+           {!SKIP_AUTH && (
            <button onClick={handleLogout} className="w-full py-2.5 text-xs font-bold text-slate-300 hover:text-white border border-white/10 rounded-lg hover:bg-white/10 transition-colors flex items-center justify-center gap-2">
              <i className="fas fa-sign-out-alt"></i> Encerrar Sessão
            </button>
+           )}
         </div>
       </aside>
 
