@@ -6,7 +6,7 @@ import { subscribeToClients, addClient, updateClient, deleteClient, subscribeToU
 import { generateCommercialStrategy } from './services/geminiService';
 import { Client, ClientStatus, AIAnalysis, UserProfile, AccessLevel, AppSettings, Product, MarketEntry } from './types';
 import { STATUS_COLORS, SEGMENT_ICONS, DEFAULT_AVATAR } from './constants';
-import { SKIP_AUTH, TEST_USER } from './authConfig';
+import { SKIP_AUTH, TEST_USER, normalizeProfile, firstName, formatMoney } from './authConfig';
 import StatsCard from './components/StatsCard';
 import ClientForm from './components/ClientForm';
 import ClientProfile from './components/ClientProfile';
@@ -28,15 +28,24 @@ enum View {
 
 const MASTER_EMAIL = 'giovane.santos@iccbrazil.com.br';
 
-const profileFromAuthUser = (user: FirebaseUser): UserProfile => ({
-  uid: user.uid,
-  email: user.email!,
-  displayName: user.displayName || user.email!.split('@')[0],
-  role: user.email === MASTER_EMAIL ? 'Diretor Comercial' : 'N/A',
-  department: user.email === MASTER_EMAIL ? 'Diretoria' : 'N/A',
-  accessLevel: user.email === MASTER_EMAIL ? AccessLevel.SUPERADMIN : AccessLevel.OTHER,
-  photoUrl: user.photoURL || '',
-});
+const CLIENT_STATUS_LIST = [
+  ClientStatus.PROSPECT,
+  ClientStatus.LEAD,
+  ClientStatus.NEGOTIATION,
+  ClientStatus.ACTIVE,
+  ClientStatus.CHURN,
+] as const;
+
+const profileFromAuthUser = (user: FirebaseUser): UserProfile =>
+  normalizeProfile({
+    uid: user.uid,
+    email: user.email!,
+    displayName: user.displayName || user.email!.split('@')[0],
+    role: user.email === MASTER_EMAIL ? 'Diretor Comercial' : 'N/A',
+    department: user.email === MASTER_EMAIL ? 'Diretoria' : 'N/A',
+    accessLevel: user.email === MASTER_EMAIL ? AccessLevel.SUPERADMIN : AccessLevel.OTHER,
+    photoUrl: user.photoURL || '',
+  });
 
 const App: React.FC = () => {
   // Auth State
@@ -78,7 +87,9 @@ const App: React.FC = () => {
         setMarketEntries([]);
       } else {
         // Perfil imediato — evita travar após login enquanto o RTDB responde
-        setUserProfile((prev) => (prev?.uid === user.uid ? prev : profileFromAuthUser(user)));
+        setUserProfile((prev) =>
+          prev?.uid === user.uid ? prev : profileFromAuthUser(user)
+        );
       }
       setLoadingAuth(false);
     });
@@ -119,7 +130,7 @@ const App: React.FC = () => {
         saveUser(profile).catch(console.error);
       }
 
-      if (profile) setUserProfile(profile);
+      if (profile) setUserProfile(normalizeProfile(profile));
     });
 
     return () => {
@@ -212,9 +223,9 @@ const App: React.FC = () => {
   const activeClients = clients.filter(c => c.status === ClientStatus.ACTIVE).length;
   const prospectClients = clients.filter(c => c.status === ClientStatus.PROSPECT).length;
 
-  const chartData = Object.values(ClientStatus).map(status => ({
+  const chartData = CLIENT_STATUS_LIST.map((status) => ({
     name: status,
-    value: clients.filter(c => c.status === status).length
+    value: clients.filter((c) => c.status === status).length,
   }));
   
   const chartColors = ['#94a3b8', '#3b82f6', '#eab308', '#10b981', '#ef4444'];
@@ -330,7 +341,7 @@ const App: React.FC = () => {
               <div className="flex justify-between items-end border-b border-slate-200 pb-6">
                 <div>
                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">Visão Geral</h2>
-                   <p className="text-slate-500 mt-1 font-medium">Bem-vindo de volta, <span className="text-emerald-600">{userProfile.displayName.split(' ')[0]}</span>.</p>
+                   <p className="text-slate-500 mt-1 font-medium">Bem-vindo de volta, <span className="text-emerald-600">{firstName(userProfile.displayName)}</span>.</p>
                 </div>
                 <button onClick={() => { setIsFormOpen(true); setEditingClient(null); setCurrentView(View.CLIENTS); }} className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-200 transform hover:-translate-y-0.5 flex items-center gap-2 font-bold">
                   <i className="fas fa-plus"></i> Novo Cliente
@@ -339,7 +350,7 @@ const App: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatsCard title="Meus Clientes" value={clients.length} icon="fa-users" color="bg-gradient-to-br from-blue-400 to-blue-600" />
-                <StatsCard title="Pipeline (Potencial)" value={`$${totalPotential.toLocaleString()}`} icon="fa-chart-line" color="bg-gradient-to-br from-emerald-400 to-emerald-600" trend="+12% vs mês anterior" />
+                <StatsCard title="Pipeline (Potencial)" value={`$${formatMoney(totalPotential)}`} icon="fa-chart-line" color="bg-gradient-to-br from-emerald-400 to-emerald-600" trend="+12% vs mês anterior" />
                 <StatsCard title="Ativos" value={activeClients} icon="fa-handshake" color="bg-gradient-to-br from-purple-400 to-purple-600" />
                 <StatsCard title="Prospects" value={prospectClients} icon="fa-bullseye" color="bg-gradient-to-br from-orange-400 to-orange-600" />
               </div>
@@ -385,7 +396,7 @@ const App: React.FC = () => {
                           <p className="text-sm font-bold text-slate-800 truncate group-hover:text-emerald-700 transition-colors">{client.companyName}</p>
                           <p className="text-xs text-slate-500 truncate font-medium flex items-center gap-1">
                               <i className="fas fa-dollar-sign text-emerald-500 text-[10px]"></i>
-                              {client.potentialValue.toLocaleString()}
+                              {formatMoney(client.potentialValue)}
                           </p>
                         </div>
                         <button className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-emerald-600 hover:text-white hover:scale-110">
@@ -479,7 +490,7 @@ const App: React.FC = () => {
                                 {client.status}
                               </span>
                             </td>
-                            <td className="p-5 text-sm font-bold text-slate-700">${client.potentialValue?.toLocaleString()}</td>
+                            <td className="p-5 text-sm font-bold text-slate-700">${formatMoney(client.potentialValue)}</td>
                             <td className="p-5 text-right">
                                <div className="flex items-center justify-end gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button 
