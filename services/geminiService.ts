@@ -1,9 +1,29 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Client, AIAnalysis } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const API_KEY = process.env.API_KEY;
+
+// Inicialização preguiçosa: criar o cliente no topo do módulo derruba o app
+// inteiro (tela branca) quando a API key não está configurada, pois o SDK
+// lança erro ao ser instanciado no navegador sem chave.
+let aiClient: GoogleGenAI | null = null;
+
+const getClient = (): GoogleGenAI => {
+  if (!API_KEY) {
+    throw new Error(
+      "Chave da API Gemini não configurada. Defina GEMINI_API_KEY nas variáveis de ambiente."
+    );
+  }
+  if (!aiClient) {
+    aiClient = new GoogleGenAI({ apiKey: API_KEY });
+  }
+  return aiClient;
+};
+
+export const isAiEnabled = (): boolean => Boolean(API_KEY);
 
 export const generateCommercialStrategy = async (client: Client): Promise<AIAnalysis> => {
+  const ai = getClient();
   const model = "gemini-3-flash-preview";
   
   const prompt = `
